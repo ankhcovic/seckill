@@ -16,7 +16,7 @@
         <!--
             配置SpringMVC 需要配置的文件
             spring-dao.xml，spring-service.xml,spring-web.xml
-            Mybites -> spring -> springMVC
+            Mybatis -> spring -> springMVC
         -->
         <init-param>
           <param-name>contextConfigLocation</param-name>
