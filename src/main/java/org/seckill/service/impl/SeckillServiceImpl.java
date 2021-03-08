@@ -2,6 +2,7 @@ package org.seckill.service.impl;
 
 import org.seckill.dao.SeckillDao;
 import org.seckill.dao.SuccessKilledDao;
+import org.seckill.dao.cache.RedisDao;
 import org.seckill.dto.Exposer;
 import org.seckill.dto.SeckillExecution;
 import org.seckill.entity.Seckill;
@@ -20,7 +21,9 @@ import org.springframework.util.DigestUtils;
 
 import javax.annotation.Resource;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * @author gaoyouxin
@@ -29,12 +32,15 @@ import java.util.List;
 @Service
 public class SeckillServiceImpl implements SeckillService {
     // 日志对象
-    private Logger logger = LoggerFactory.getLogger(this.getClass());
+    private final Logger logger = LoggerFactory.getLogger(this.getClass());
 
     //加入一个混淆字符串(秒杀接口)的salt，为了我避免用户猜出我们的md5值，值任意给，越复杂越好
     private final String salt="shsdssljdd'l.";
 
     // 注入service依赖
+    @Autowired
+    private RedisDao redisDao;
+
     @Autowired // @Resource
     private SeckillDao seckillDao;
 
@@ -53,10 +59,19 @@ public class SeckillServiceImpl implements SeckillService {
 
     @Override
     public Exposer exportSeckillUrl(long seckillId) {
-        Seckill seckill = seckillDao.queryById(seckillId);
-        // 若是查不到秒杀产品的记录
-        if(seckill == null){
-            return new Exposer(false, seckillId);
+        // 优化点：缓存优化 超时的基础维护一致性
+        // 1:访问redis
+        Seckill seckill = redisDao.getSeckill(seckillId);
+        if (seckill == null){
+            // 2:访问数据库
+            seckill = seckillDao.queryById(seckillId);
+            // 若是查不到秒杀产品的记录
+            if(seckill == null){
+                return new Exposer(false, seckillId);
+            } else {
+                // 3:放入redis
+                redisDao.putSeckill(seckill);
+            }
         }
 
         // 秒杀未开启
@@ -98,26 +113,27 @@ public class SeckillServiceImpl implements SeckillService {
         }
 
         //执行秒杀逻辑:减库存+增加购买明细
-        Date nowTime=new Date();
+        Date nowTime = new Date();
 
         try {
-            //  减库存
-            int updateCount = seckillDao.reduceNumber(seckillId, nowTime);
-            if (updateCount <= 0) {
-                // 没有更新库存记录，说明秒杀结束
-                throw new SeckillCloseException("seckill is closed");
+            // 记录购买行为，更新库存，秒杀成功，增加明细
+            int insertCount = successKilledDao.insertSuccessKilled(seckillId, userPhone);
+            // 看该明细是否被重复插入，即用户是否重复秒杀
+            if (insertCount <= 0){
+                throw new RepeatKillException("seckill repeated");
             } else {
-                // 否则记录购买行为，更新库存，秒杀成功，增加明细
-                int insertCount = successKilledDao.insertSuccessKilled(seckillId, userPhone);
-                // 看该明细是否被重复插入，即用户是否重复秒杀
-                if (insertCount <= 0){
-                    throw new RepeatKillException("seckill repeated");
+                //  减库存,热点商品竞争
+                int updateCount = seckillDao.reduceNumber(seckillId, nowTime);
+                if (updateCount <= 0) {
+                    // 没有更新库存记录，说明秒杀结束 rollback
+                    throw new SeckillCloseException("seckill is closed");
                 } else {
-                    // 秒杀成功，得到成功插入的明细记录，并返回成功秒杀的信息
+                    // 秒杀成功，得到成功插入的明细记录，并返回成功秒杀的信息 commit
                     SuccessKilled successKilled = successKilledDao.queryByIdWithSeckill(seckillId, userPhone);
                     return new SeckillExecution(seckillId, SeckillStatEnum.SUCCESS, successKilled);
                 }
             }
+
         } catch (SeckillCloseException e1){
             throw e1;
         } catch (RepeatKillException e2){
@@ -127,5 +143,28 @@ public class SeckillServiceImpl implements SeckillService {
             // 所有编译器异常转化为运行期异常
             throw new SeckillException("seckill inner error :" + e.getMessage());
         }
+    }
+
+    @Override
+    public SeckillExecution executeSeckillProcedure(long seckillId, long userPhone, String md5) {
+        if (md5==null||!md5.equals(getMD5(seckillId)))
+        {
+            //秒杀数据被重写了
+            return new SeckillExecution(seckillId, SeckillStatEnum.DATE_REWRITE);
+        }
+        //执行秒杀逻辑:减库存+增加购买明细
+        Date killTime = new Date();
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("seckillId", seckillId);
+        map.put("phone", userPhone);
+        map.put("killTime", killTime);
+        map.put("resulr", null);
+        // 执行完成之后，result被赋值
+        try {
+            seckillDao.killByProcedure(map);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return null;
     }
 }

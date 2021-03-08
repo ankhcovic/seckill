@@ -47,4 +47,14 @@ public interface SeckillService {
      */
     SeckillExecution executeSeckill(long seckillId, long userPhone, String md5)
         throws SeckillException, RepeatKillException, SeckillCloseException;
+
+    /**
+     * 执行秒杀操作 by 存储过程 不需要异常，之前是用异常告诉spring是要提交还是回滚
+     * @param seckillId
+     * @param userPhone
+     * @param md5
+     * @return
+     */
+    SeckillExecution executeSeckillProcedure(long seckillId, long userPhone, String md5)
+            throws SeckillException, RepeatKillException, SeckillCloseException;
 }

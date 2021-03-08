@@ -5,7 +5,7 @@ package org.seckill.dto;
  * @date 2021/3/2 - 14:00
  */
 public class SeckillResult<T> {
-    private boolean success;
+    private boolean success;// 是操作是否成功而非秒杀是否成功
     private T data;
     private String error;
 
